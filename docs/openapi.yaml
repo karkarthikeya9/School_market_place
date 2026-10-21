@@ -1,0 +1,1137 @@
+openapi: 3.0.3
+info:
+  title: Student Marketplace API
+  version: 1.0.0
+  description: |
+    REST API for the Student Marketplace (Amazon-inspired student-to-student marketplace).
+    Authoritative contract consumed by the frontend. See docs/06-api-contract.md for semantics.
+    All prices are in INR rupees (stored internally as integer paise).
+servers:
+  - url: /api/v1
+    description: Relative base (same origin as the frontend)
+
+tags:
+  - name: auth
+  - name: categories
+  - name: listings
+  - name: images
+  - name: sellers
+  - name: conversations
+  - name: wishlist
+  - name: reports
+  - name: admin
+  - name: health
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Liveness/readiness check
+      security: []
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, db]
+                properties:
+                  status: { type: string, example: ok }
+                  db: { type: string, example: ok }
+
+  /auth/register:
+    post:
+      tags: [auth]
+      summary: Register a new student account
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, display_name]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 8 }
+                display_name: { type: string, minLength: 1, maxLength: 80 }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Log in
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        "200":
+          description: Authenticated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user]
+                properties:
+                  user: { $ref: "#/components/schemas/User" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      summary: Log out
+      security: [{ cookieAuth: [] }]
+      responses:
+        "200":
+          description: Logged out
+          content:
+            application/json:
+              schema: { type: object, properties: { ok: { type: boolean } } }
+
+  /me:
+    get:
+      tags: [auth]
+      summary: Current user and profile
+      security: [{ cookieAuth: [] }]
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    patch:
+      tags: [auth]
+      summary: Update own profile
+      security: [{ cookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                display_name: { type: string, minLength: 1, maxLength: 80 }
+                bio: { type: string, maxLength: 500 }
+                profile_image_url: { type: string, format: uri }
+      responses:
+        "200":
+          description: Updated profile
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /categories:
+    get:
+      tags: [categories]
+      summary: List categories
+      security: []
+      responses:
+        "200":
+          description: Category list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page, page_size, total, total_pages]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Category" }
+                  page: { type: integer }
+                  page_size: { type: integer }
+                  total: { type: integer }
+                  total_pages: { type: integer }
+
+  /universities:
+    get:
+      tags: [categories]
+      summary: List universities (provisional)
+      security: []
+      responses:
+        "200":
+          description: University list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/University" }
+
+  /listings:
+    get:
+      tags: [listings]
+      summary: Search and browse active listings
+      security: []
+      parameters:
+        - { name: q, in: query, schema: { type: string }, description: Keyword search }
+        - { name: category_id, in: query, schema: { type: string, format: uuid } }
+        - { name: category, in: query, schema: { type: string }, description: Category slug }
+        - { name: min_price, in: query, schema: { type: number, minimum: 0 } }
+        - { name: max_price, in: query, schema: { type: number, minimum: 0 } }
+        - name: condition
+          in: query
+          schema: { type: string }
+          description: Comma-separated conditions (new,like_new,very_good,good,acceptable)
+        - name: sort
+          in: query
+          schema: { type: string, enum: [newest, relevance, price_asc, price_desc] }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      responses:
+        "200":
+          description: Paginated listings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedListings"
+    post:
+      tags: [listings]
+      summary: Create a listing (draft)
+      security: [{ cookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, description, price, category_id, condition]
+              properties:
+                title: { type: string, minLength: 3, maxLength: 120 }
+                description: { type: string, maxLength: 4000 }
+                price: { type: number, exclusiveMinimum: true, minimum: 0 }
+                category_id: { type: string, format: uuid }
+                condition:
+                  type: string
+                  enum: [new, like_new, very_good, good, acceptable]
+                quantity: { type: integer, minimum: 1, maximum: 100, default: 1 }
+      responses:
+        "201":
+          description: Created draft listing
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Listing" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /listings/{listing_id}:
+    parameters:
+      - { name: listing_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [listings]
+      summary: Get a listing detail
+      security: []
+      responses:
+        "200":
+          description: Listing detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Listing" }
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [listings]
+      summary: Edit own listing
+      security: [{ cookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string, minLength: 3, maxLength: 120 }
+                description: { type: string, maxLength: 4000 }
+                price: { type: number, exclusiveMinimum: true, minimum: 0 }
+                category_id: { type: string, format: uuid }
+                condition:
+                  type: string
+                  enum: [new, like_new, very_good, good, acceptable]
+                quantity: { type: integer, minimum: 1, maximum: 100 }
+                version: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: Updated listing
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Listing" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+    delete:
+      tags: [listings]
+      summary: Soft-delete own listing (status -> removed)
+      security: [{ cookieAuth: [] }]
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Listing" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /listings/{listing_id}/publish:
+    post:
+      tags: [listings]
+      summary: Publish a draft listing
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { name: listing_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Published
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Listing" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /listings/{listing_id}/mark-sold:
+    post:
+      tags: [listings]
+      summary: Mark listing as sold
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { name: listing_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Marked sold
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Listing" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /listings/{listing_id}/deactivate:
+    post:
+      tags: [listings]
+      summary: Deactivate a listing (owner or admin)
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { name: listing_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Deactivated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Listing" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /listings/{listing_id}/reactivate:
+    post:
+      tags: [listings]
+      summary: Reactivate a listing (owner or admin)
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { name: listing_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Reactivated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Listing" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /me/listings:
+    get:
+      tags: [listings]
+      summary: List own listings (any status)
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      responses:
+        "200":
+          description: Own listings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaginatedListings" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /listings/{listing_id}/images:
+    post:
+      tags: [images]
+      summary: Upload an image for a listing
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { name: listing_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        "201":
+          description: Uploaded image
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ListingImage" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /listings/{listing_id}/images/{image_id}:
+    delete:
+      tags: [images]
+      summary: Remove an image
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { name: listing_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: image_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Removed
+          content:
+            application/json:
+              schema: { type: object, properties: { ok: { type: boolean } } }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /listings/{listing_id}/images/order:
+    patch:
+      tags: [images]
+      summary: Reorder images
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { name: listing_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [image_ids]
+              properties:
+                image_ids:
+                  type: array
+                  items: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Reordered
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/ListingImage" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /sellers/{seller_id}:
+    get:
+      tags: [sellers]
+      summary: Public seller profile
+      security: []
+      parameters:
+        - { name: seller_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Public profile
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SellerPublic" }
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /sellers/{seller_id}/listings:
+    get:
+      tags: [sellers]
+      summary: A seller's active listings
+      security: []
+      parameters:
+        - { name: seller_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      responses:
+        "200":
+          description: Seller's active listings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaginatedListings" }
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /conversations:
+    get:
+      tags: [conversations]
+      summary: List my conversations
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      responses:
+        "200":
+          description: Conversations
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page, page_size, total, total_pages]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Conversation" }
+                  page: { type: integer }
+                  page_size: { type: integer }
+                  total: { type: integer }
+                  total_pages: { type: integer }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [conversations]
+      summary: Start (or get existing) conversation about a listing
+      security: [{ cookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [listing_id]
+              properties:
+                listing_id: { type: string, format: uuid }
+      responses:
+        "201":
+          description: Created conversation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Conversation" }
+        "200":
+          description: Existing conversation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Conversation" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /conversations/{conversation_id}:
+    get:
+      tags: [conversations]
+      summary: Get conversation meta
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { name: conversation_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Conversation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Conversation" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /conversations/{conversation_id}/messages:
+    get:
+      tags: [conversations]
+      summary: Get message history (cursor pagination)
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { name: conversation_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - { name: before, in: query, schema: { type: string, format: uuid }, description: Return messages older than this message id }
+      responses:
+        "200":
+          description: Messages (newest first)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, has_more]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Message" }
+                  has_more: { type: boolean }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      tags: [conversations]
+      summary: Send a message
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { name: conversation_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: { type: string, minLength: 1, maxLength: 2000 }
+      responses:
+        "201":
+          description: Created message
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Message" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /wishlist:
+    get:
+      tags: [wishlist]
+      summary: List saved items
+      security: [{ cookieAuth: [] }]
+      responses:
+        "200":
+          description: Saved items
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/WishlistItem" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [wishlist]
+      summary: Save a listing (idempotent)
+      security: [{ cookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [listing_id]
+              properties:
+                listing_id: { type: string, format: uuid }
+      responses:
+        "201":
+          description: Saved
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WishlistItem" }
+        "200":
+          description: Already saved
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WishlistItem" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /wishlist/{listing_id}:
+    delete:
+      tags: [wishlist]
+      summary: Remove a saved listing
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { name: listing_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Removed
+          content:
+            application/json:
+              schema: { type: object, properties: { ok: { type: boolean } } }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /reports:
+    post:
+      tags: [reports]
+      summary: Report a listing
+      security: [{ cookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [listing_id, reason]
+              properties:
+                listing_id: { type: string, format: uuid }
+                reason:
+                  type: string
+                  enum: [prohibited, misleading, spam, other]
+                note: { type: string, maxLength: 500 }
+      responses:
+        "201":
+          description: Created report
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Report" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /admin/reports:
+    get:
+      tags: [admin]
+      summary: List reports (admin)
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [open, resolved, dismissed] } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      responses:
+        "200":
+          description: Reports
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page, page_size, total, total_pages]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Report" }
+                  page: { type: integer }
+                  page_size: { type: integer }
+                  total: { type: integer }
+                  total_pages: { type: integer }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /admin/reports/{report_id}/resolve:
+    post:
+      tags: [admin]
+      summary: Resolve or dismiss a report (admin)
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { name: report_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [resolved, dismissed] }
+                note: { type: string, maxLength: 500 }
+      responses:
+        "200":
+          description: Resolved
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Report" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /admin/listings/{listing_id}/moderate:
+    post:
+      tags: [admin]
+      summary: Moderate a listing (deactivate/reactivate/remove)
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { name: listing_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action, reason]
+              properties:
+                action:
+                  type: string
+                  enum: [deactivate, reactivate, remove]
+                reason: { type: string, minLength: 1, maxLength: 1000 }
+      responses:
+        "200":
+          description: Moderated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Listing" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /admin/users/{user_id}/suspend:
+    post:
+      tags: [admin]
+      summary: Suspend a user (admin)
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { name: user_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Suspended
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /admin/users/{user_id}/reactivate:
+    post:
+      tags: [admin]
+      summary: Reinstate a suspended user (admin)
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { name: user_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Reactivated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: session
+
+  responses:
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    Forbidden:
+      description: Forbidden
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    ValidationError:
+      description: Validation error
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    Conflict:
+      description: Conflict
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    RateLimited:
+      description: Rate limited
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
+  schemas:
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum: [UNAUTHORIZED, FORBIDDEN, NOT_FOUND, VALIDATION_ERROR, CONFLICT, RATE_LIMITED, INTERNAL]
+            message: { type: string }
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  field: { type: string }
+                  issue: { type: string }
+
+    User:
+      type: object
+      required: [id, email, role, status, profile]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        role: { type: string, enum: [student, admin] }
+        status: { type: string, enum: [active, suspended] }
+        email_verified: { type: boolean }
+        profile:
+          type: object
+          required: [display_name]
+          properties:
+            display_name: { type: string }
+            university_id: { type: string, format: uuid, nullable: true }
+            profile_image_url: { type: string, format: uri, nullable: true }
+            bio: { type: string, nullable: true }
+
+    Category:
+      type: object
+      required: [id, name, slug]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        slug: { type: string }
+
+    University:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+
+    ListingImage:
+      type: object
+      required: [id, url, position]
+      properties:
+        id: { type: string, format: uuid }
+        url: { type: string, format: uri }
+        position: { type: integer }
+
+    Listing:
+      type: object
+      required: [id, title, description, price, currency, condition, quantity, status, category, seller, images, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        description: { type: string }
+        price: { type: number }
+        currency: { type: string, example: INR }
+        condition:
+          type: string
+          enum: [new, like_new, very_good, good, acceptable]
+        quantity: { type: integer }
+        status:
+          type: string
+          enum: [draft, active, sold, inactive, removed]
+        version: { type: integer }
+        category: { $ref: "#/components/schemas/Category" }
+        seller:
+          type: object
+          required: [id, display_name]
+          properties:
+            id: { type: string, format: uuid }
+            display_name: { type: string }
+        images:
+          type: array
+          items: { $ref: "#/components/schemas/ListingImage" }
+        published_at: { type: string, format: date-time, nullable: true }
+        sold_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    PaginatedListings:
+      type: object
+      required: [items, page, page_size, total, total_pages]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Listing" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer }
+        total_pages: { type: integer }
+
+    SellerPublic:
+      type: object
+      required: [id, display_name, active_listing_count]
+      properties:
+        id: { type: string, format: uuid }
+        display_name: { type: string }
+        university:
+          $ref: "#/components/schemas/University"
+        profile_image_url: { type: string, format: uri, nullable: true }
+        bio: { type: string, nullable: true }
+        active_listing_count: { type: integer }
+
+    Message:
+      type: object
+      required: [id, sender_id, body, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        sender_id: { type: string, format: uuid }
+        body: { type: string }
+        created_at: { type: string, format: date-time }
+
+    Conversation:
+      type: object
+      required: [id, listing, counterpart, updated_at, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        listing:
+          type: object
+          required: [id, title, status]
+          properties:
+            id: { type: string, format: uuid }
+            title: { type: string }
+            status:
+              type: string
+              enum: [draft, active, sold, inactive, removed]
+        counterpart:
+          type: object
+          required: [id, display_name]
+          properties:
+            id: { type: string, format: uuid }
+            display_name: { type: string }
+        last_message:
+          type: object
+          nullable: true
+          properties:
+            body: { type: string }
+            created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+
+    WishlistItem:
+      type: object
+      required: [listing_id, title, price, condition, status, available, saved_at]
+      properties:
+        listing_id: { type: string, format: uuid }
+        title: { type: string }
+        price: { type: number }
+        currency: { type: string, example: INR }
+        condition:
+          type: string
+          enum: [new, like_new, very_good, good, acceptable]
+        status:
+          type: string
+          enum: [draft, active, sold, inactive, removed]
+        cover_image_url: { type: string, format: uri, nullable: true }
+        available: { type: boolean }
+        saved_at: { type: string, format: date-time }
+
+    Report:
+      type: object
+      required: [id, listing_id, reason, status, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        reporter_id: { type: string, format: uuid }
+        listing_id: { type: string, format: uuid }
+        reason:
+          type: string
+          enum: [prohibited, misleading, spam, other]
+        note: { type: string, nullable: true }
+        status:
+          type: string
+          enum: [open, resolved, dismissed]
+        created_at: { type: string, format: date-time }

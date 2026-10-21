@@ -1,0 +1,265 @@
+// Prisma schema — Student Marketplace
+// Postgres provider. See docs/03-domain-model.md.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  // Optional pooled (transaction) connection URL for Neon/Supabase pgbouncer.
+  directUrl = env("DIRECT_URL")
+}
+
+enum Role {
+  STUDENT
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum ListingStatus {
+  DRAFT
+  ACTIVE
+  SOLD
+  INACTIVE
+  REMOVED
+}
+
+enum Condition {
+  NEW
+  LIKE_NEW
+  VERY_GOOD
+  GOOD
+  ACCEPTABLE
+}
+
+enum ReportReason {
+  PROHIBITED
+  MISLEADING
+  SPAM
+  OTHER
+}
+
+enum ReportStatus {
+  OPEN
+  RESOLVED
+  DISMISSED
+}
+
+enum ModerationActionType {
+  DEACTIVATE
+  REACTIVATE
+  REMOVE
+}
+
+model User {
+  id               String      @id @default(uuid()) @db.Uuid
+  email            String      @unique @db.VarChar(320)
+  passwordHash     String      @map("password_hash")
+  role             Role        @default(STUDENT)
+  status           UserStatus  @default(ACTIVE)
+  emailVerifiedAt  DateTime?   @map("email_verified_at")
+  createdAt        DateTime    @default(now()) @map("created_at")
+  updatedAt        DateTime    @updatedAt @map("updated_at")
+
+  profile          UserProfile?
+  listings         Listing[]   @relation("SellerListings")
+  conversationsAsBuyer  Conversation[] @relation("BuyerConversations")
+  conversationsAsSeller Conversation[] @relation("SellerConversations")
+  messages         Message[]
+  wishlistItems    WishlistItem[]
+  reports          Report[]
+  moderationActions ModerationAction[]
+  auditLogs        AuditLog[]
+
+  @@map("users")
+}
+
+model UserProfile {
+  id              String     @id @default(uuid()) @db.Uuid
+  userId          String     @unique @map("user_id") @db.Uuid
+  displayName     String     @map("display_name") @db.VarChar(80)
+  universityId    String?    @map("university_id") @db.Uuid
+  profileImageUrl String?    @map("profile_image_url") @db.Text
+  bio             String?    @db.VarChar(500)
+  createdAt       DateTime   @default(now()) @map("created_at")
+  updatedAt       DateTime   @updatedAt @map("updated_at")
+
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  university University? @relation(fields: [universityId], references: [id], onDelete: SetNull)
+
+  @@index([universityId])
+  @@map("user_profiles")
+}
+
+model University {
+  id          String        @id @default(uuid()) @db.Uuid
+  name        String        @unique @db.VarChar(200)
+  emailDomain String        @unique @map("email_domain") @db.VarChar(200)
+  createdAt   DateTime      @default(now()) @map("created_at")
+
+  profiles UserProfile[]
+
+  @@map("universities")
+}
+
+model Category {
+  id        String    @id @default(uuid()) @db.Uuid
+  name      String    @unique @db.VarChar(120)
+  slug      String    @unique @db.VarChar(120)
+  sortOrder Int       @default(0) @map("sort_order")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  listings Listing[]
+
+  @@map("categories")
+}
+
+model Listing {
+  id          String        @id @default(uuid()) @db.Uuid
+  sellerId    String        @map("seller_id") @db.Uuid
+  categoryId  String        @map("category_id") @db.Uuid
+  title       String        @db.VarChar(120)
+  description String        @db.Text
+  priceMinor  Int           @map("price_minor")
+  condition   Condition
+  quantity    Int           @default(1)
+  status      ListingStatus @default(DRAFT)
+  version     Int           @default(1)
+  publishedAt DateTime?     @map("published_at")
+  soldAt      DateTime?     @map("sold_at")
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+
+  seller      User             @relation("SellerListings", fields: [sellerId], references: [id])
+  category    Category         @relation(fields: [categoryId], references: [id])
+  images      ListingImage[]
+  conversations Conversation[] @relation("ListingConversations")
+  wishlistItems WishlistItem[]
+  reports     Report[]
+  moderationActions ModerationAction[]
+
+  @@index([status, publishedAt(sort: Desc)])
+  @@index([categoryId])
+  @@index([sellerId])
+  @@index([status, priceMinor])
+  @@map("listings")
+}
+
+model ListingImage {
+  id         String   @id @default(uuid()) @db.Uuid
+  listingId  String   @map("listing_id") @db.Uuid
+  storageKey String   @map("storage_key") @db.Text
+  url        String   @db.Text
+  position   Int
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  listing Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@unique([listingId, position])
+  @@index([listingId])
+  @@map("listing_images")
+}
+
+model Conversation {
+  id        String   @id @default(uuid()) @db.Uuid
+  listingId String   @map("listing_id") @db.Uuid
+  buyerId   String   @map("buyer_id") @db.Uuid
+  sellerId  String   @map("seller_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  listing  Listing    @relation("ListingConversations", fields: [listingId], references: [id])
+  buyer    User       @relation("BuyerConversations", fields: [buyerId], references: [id])
+  seller   User       @relation("SellerConversations", fields: [sellerId], references: [id])
+  messages Message[]
+
+  @@unique([listingId, buyerId])
+  @@index([buyerId, updatedAt(sort: Desc)])
+  @@index([sellerId, updatedAt(sort: Desc)])
+  @@map("conversations")
+}
+
+model Message {
+  id             String   @id @default(uuid()) @db.Uuid
+  conversationId String   @map("conversation_id") @db.Uuid
+  senderId       String   @map("sender_id") @db.Uuid
+  body           String   @db.Text
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User         @relation(fields: [senderId], references: [id])
+
+  @@index([conversationId, createdAt])
+  @@map("messages")
+}
+
+model WishlistItem {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  listingId String   @map("listing_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  listing Listing @relation(fields: [listingId], references: [id])
+
+  @@unique([userId, listingId])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("wishlist_items")
+}
+
+model Report {
+  id         String       @id @default(uuid()) @db.Uuid
+  reporterId String       @map("reporter_id") @db.Uuid
+  listingId  String       @map("listing_id") @db.Uuid
+  reason     ReportReason
+  note       String?      @db.VarChar(500)
+  status     ReportStatus @default(OPEN)
+  resolvedBy String?      @map("resolved_by") @db.Uuid
+  resolvedAt DateTime?    @map("resolved_at")
+  createdAt  DateTime     @default(now()) @map("created_at")
+
+  reporter User    @relation(fields: [reporterId], references: [id])
+  listing  Listing @relation(fields: [listingId], references: [id])
+
+  @@unique([reporterId, listingId])
+  @@index([status, createdAt])
+  @@map("reports")
+}
+
+model ModerationAction {
+  id          String               @id @default(uuid()) @db.Uuid
+  listingId   String               @map("listing_id") @db.Uuid
+  moderatorId String               @map("moderator_id") @db.Uuid
+  action      ModerationActionType
+  reason      String               @db.Text
+  createdAt   DateTime             @default(now()) @map("created_at")
+
+  listing   Listing @relation(fields: [listingId], references: [id])
+  moderator User    @relation(fields: [moderatorId], references: [id])
+
+  @@index([listingId])
+  @@index([moderatorId])
+  @@map("moderation_actions")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  actorId    String?  @map("actor_id") @db.Uuid
+  action     String   @db.VarChar(120)
+  entityType String   @map("entity_type") @db.VarChar(120)
+  entityId   String   @map("entity_id") @db.Uuid
+  metadata   Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
