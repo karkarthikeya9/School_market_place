@@ -24,8 +24,6 @@ export async function publishListing(id: string, actor: Actor) {
   const listing = await load(id);
   forbiddenUnless(isOwner(listing, actor));
   if (listing.status !== 'DRAFT') throw Errors.conflict('Only draft listings can be published');
-  const imageCount = await prisma.listingImage.count({ where: { listingId: id } });
-  if (imageCount < 1) throw Errors.validation('Add at least one image before publishing');
 
   const updated = await prisma.listing.update({
     where: { id },

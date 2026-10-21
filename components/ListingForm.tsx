@@ -116,16 +116,13 @@ export function ListingForm({ listing }: { listing?: Listing }) {
     }
     const newListing = create.data;
 
-    // Upload images.
+    // Upload images (optional — failures are non-fatal so a listing can be
+    // created and published even without image storage configured).
+    let uploadError = '';
     for (const img of images) {
       if (img.file) {
         const up = await uploadImage(newListing.id, img.file);
-        if (!up.ok) {
-          setBusy(false);
-          setError(up.error ?? 'Image upload failed');
-          router.push(`/listings/${newListing.id}`);
-          return;
-        }
+        if (!up.ok) uploadError = up.error ?? 'Some images failed to upload';
       }
     }
 
@@ -133,8 +130,10 @@ export function ListingForm({ listing }: { listing?: Listing }) {
       const pub = await api<Listing>(`/api/v1/listings/${newListing.id}/publish`, { method: 'POST' });
       setBusy(false);
       if (!pub.ok) setError(pub.error ?? 'Listing created as draft (publish failed)');
+      else if (uploadError) setError(`Listing published, but: ${uploadError}`);
     } else {
       setBusy(false);
+      if (uploadError) setError(`Listing saved as draft, but: ${uploadError}`);
     }
     router.push(`/listings/${newListing.id}`);
   }
@@ -185,7 +184,7 @@ export function ListingForm({ listing }: { listing?: Listing }) {
       </div>
 
       <div>
-        <span className="label">Images ({images.length}/5)</span>
+        <span className="label">Images ({images.length}/5) — optional</span>
         <div className="mt-2 flex flex-wrap gap-3">
           {images.map((img, i) => (
             <div key={img.id ?? img.url} className="relative">
